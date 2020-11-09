@@ -9,12 +9,11 @@
     This will query ports 443 and 993 on host "outlook.office365.com" for a certificate expiring in the next 72 days and reporting any issue to "support@mydomain.com"
     Test-CertificateExpiryDate.ps1 -Name "outlook.office365.com" -ExpiryThreshold 72 -AlertToAddress "support@mydomain.com" -port 443, 993
 .VERSION
-    0.9.8 - Process-MainThread
+    0.9.9 - Process-MainThread
     2.0.0 - Script wrapper (for logging and alerting)
 .TODO
     Check date validation in a different language locales.
     Update the help text.
-    Within "Process-MainThread", create 'ignore validation checks' code.
     Within "function Send-EmailAlert", create logic to try port 465 before STARTTLS on port 25 and also cycle through the MX records.
 #>
 Param
@@ -56,7 +55,7 @@ Param
                         ),
 
     [boolean]
-    $IgnoeValidationIssues = $true,
+    $IgnoeValidationIssues = $false,
 
     [ValidateRange(1, 365)]
     [int]
@@ -80,7 +79,15 @@ function Process-MainThread
                 Write-Verbose "Port is $DestinationPort"
                 $Socket = New-Object Net.Sockets.TcpClient($HostName,$DestinationPort)
                 $Stream = $Socket.GetStream()
-                $SslStream = New-Object System.Net.Security.SslStream $Stream,$false
+                if ($IgnoeValidationIssues)
+                {
+                    $IgnoreCertificateValidationErrors = [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+                    $SslStream = New-Object System.Net.Security.SslStream $Stream,$false,$IgnoreCertificateValidationErrors
+                }
+                else
+                {
+                    $SslStream = New-Object System.Net.Security.SslStream $Stream,$false
+                }
                 $SslStream.AuthenticateAsClient($HostName,$null,"tls11,tls12",$false)
                 $Socket.Close()
                 $ExpiryDate = [DateTime]::Parse($SslStream.RemoteCertificate.GetExpirationDateString())
@@ -109,6 +116,10 @@ function Process-MainThread
                 elseif ($error[0].Exception.Message -like "*An attempt was made to access a socket in a way forbidden by its access permissions*")
                 {
                     Write-Output "The local machine firewall has blocked the outbound connection to $HostName`:$DestinationPort."
+                }
+                elseif ($error[0].Exception.Message -like "*The remote certificate is invalid according to the validation procedure*")
+                {
+                    Write-Output "The remote certificate does not pass validation checks on host $env:COMPUTERNAME, use `"-IgnoeValidationIssues `$true`" to test invalid certificates."
                 }
                 else
                 {
